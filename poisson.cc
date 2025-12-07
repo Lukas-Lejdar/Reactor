@@ -54,12 +54,22 @@ const dealii::types::boundary_id outer_id = 1;
 const float voltage0 = 0.;
 const float voltage2 = 1.;
 
+
+dealii::UpdateFlags POISSON_VOLUME_FLAGS = 
+    dealii::update_gradients |
+    dealii::update_JxW_values |
+    dealii::update_quadrature_points;
+
 template<int dim>
 void assemble_local_poisson_volume_matrix(
     const dealii::FEValues<dim> &fe_values,
     const dealii::Function<dim> &permittivity,
     dealii::FullMatrix<double> &local_mat
 ) {
+    const auto flags = fe_values.get_update_flags();
+    Assert((flags & POISSON_VOLUME_FLAGS) == POISSON_VOLUME_FLAGS,
+       dealii::ExcMessage("assemble_local_poisson_volume_matrix: FEValues missing required update flags."));
+
     for (const uint q : fe_values.quadrature_point_indices()) {
         const dealii::Point<dim> &x_q = fe_values.quadrature_point(q);
         for (uint i = 0; i < fe_values.get_fe().dofs_per_cell; i++) {
@@ -68,12 +78,17 @@ void assemble_local_poisson_volume_matrix(
                     * permittivity.value(x_q) 
                     * fe_values.shape_grad(j, q) 
                     * fe_values.JxW(q);
-
-
             }
         }
     }
 }
+
+dealii::UpdateFlags POISSON_BOUNDARY_FLAGS = 
+    dealii::update_values |
+    dealii::update_normal_vectors |
+    dealii::update_gradients |
+    dealii::update_JxW_values  |
+    dealii::update_quadrature_points;
 
 template<int dim>
 void assemble_local_poisson_boundary_matrix(
@@ -81,7 +96,11 @@ void assemble_local_poisson_boundary_matrix(
     const dealii::Function<dim> &permittivity,
     dealii::FullMatrix<double> &local_mat
 ) {
-    for (uint q = 0; q < fe_face_values.n_quadrature_points; ++q) {
+    const auto flags = fe_face_values.get_update_flags();
+    Assert((flags & POISSON_BOUNDARY_FLAGS) == POISSON_BOUNDARY_FLAGS,
+       dealii::ExcMessage("assemble_local_poisson_boundary_matrix: FEValues missing required update flags."));
+
+    for (const uint q : fe_face_values.quadrature_point_indices()) {
         const dealii::Point<dim> &x_q = fe_face_values.quadrature_point(q);
         const double eps = permittivity.value(x_q);
 
@@ -156,43 +175,29 @@ void Poisson<dim>::add_system_matrix(
     const dealii::Function<dim>& permittivity
 ) {
 
-    dealii::FEValues<dim> fe_values{fe, quadrature,
-        dealii::update_values |
-        dealii::update_gradients |
-        dealii::update_JxW_values |
-        dealii::update_quadrature_points
-    };
-
-    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature,
-        dealii::update_values |
-        dealii::update_gradients |
-        dealii::update_normal_vectors |
-        dealii::update_JxW_values  |
-        dealii::update_quadrature_points 
-    };
+    dealii::FEValues<dim> fe_values{fe, quadrature, POISSON_VOLUME_FLAGS };
+    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_BOUNDARY_FLAGS };
 
     dealii::FullMatrix<double> local_mat(fe.dofs_per_cell, fe.dofs_per_cell);
     dealii::Vector<double> cell_rhs(fe.dofs_per_cell);
     std::vector<dealii::types::global_dof_index> local_dof(fe.dofs_per_cell);
 
     for (const auto& cell : dof_handler.active_cell_iterators()) {
-        fe_values.reinit(cell);
-
         local_mat = 0;
         cell_rhs = 0;
 
+        fe_values.reinit(cell);
         assemble_local_poisson_volume_matrix(fe_values, permittivity, local_mat);
 
-        //for (uint face = 0; face < dealii::GeometryInfo<dim>::faces_per_cell; ++face) {
-        //    if (!cell->face(face)->at_boundary()) continue;
-        //    fe_face_values.reinit(cell, face);
-        //    assemble_local_poisson_boundary_matrix(fe_face_values, permittivity, local_mat);
-        //}
+        for (uint face = 0; face < dealii::GeometryInfo<dim>::faces_per_cell; ++face) {
+            if (!cell->face(face)->at_boundary()) continue;
+            fe_face_values.reinit(cell, face);
+            assemble_local_poisson_boundary_matrix(fe_face_values, permittivity, local_mat);
+        }
 
         cell->get_dof_indices(local_dof);
         constraints.distribute_local_to_global(local_mat, cell_rhs, local_dof, system_matrix, system_rhs);
     }
-
 
 };
 
