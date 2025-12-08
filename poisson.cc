@@ -120,7 +120,7 @@ void assemble_poisson_system(
     dealii::Vector<double>& system_rhs
 ) {
     auto& fe = dof_handler.get_fe();
-
+    
     dealii::QGauss<dim> quadrature{fe.degree + 1};
     dealii::QGauss<dim-1> face_quadrature{fe.degree + 1};
 
@@ -333,9 +333,9 @@ int main() {
         dealii::AffineConstraints<double> constraints;
         dealii::VectorTools::interpolate_boundary_values(dof_handler, inner_id, dealii::Functions::ConstantFunction<2>(capacitor.voltage0), constraints); 
         dealii::VectorTools::interpolate_boundary_values(dof_handler, outer_id, dealii::Functions::ConstantFunction<2>(capacitor.voltage1), constraints); 
-    
+
         dealii::Vector<double> solution = solve_poisson_system(dof_handler, permittivity, constraints);
-        write_out_solution(dof_handler, solution, "solution" + std::to_string(i) + ".vtu");
+        write_out_solution(dof_handler, solution, "solutions/solution" + std::to_string(i) + ".vtu");
 
         // l2 error
 

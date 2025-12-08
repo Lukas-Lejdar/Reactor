@@ -10,6 +10,8 @@ if(NOT ${deal.II_FOUND})
     )
 endif()
 
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/solutions)
+
 set(TARGET poisson)
 set(TARGET_SRC poisson.cc)
 project(${TARGET})

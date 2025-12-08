@@ -5,7 +5,7 @@ import natsort
 import glob
 import time
 
-for file in sorted(glob.glob("build/*.vtu")):
+for file in sorted(glob.glob("build/solutions/*.vtu")):
     mesh = pv.read(file)
     mesh.points[:, 2] = mesh["potential"]
 
