@@ -100,9 +100,6 @@ void assemble_poisson_system(
 ) {
     auto& fe = dof_handler.get_fe();
     
-    dealii::QGauss<dim-1> face_quadrature{fe.degree + 1};
-    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_BOUNDARY_RHS_FLAGS };
-
     dealii::QGauss<dim> quadrature{fe.degree + 1};
     dealii::FEValues<dim> fe_values{fe, quadrature, POISSON_VOLUME_FLAGS };
 
