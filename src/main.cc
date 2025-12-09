@@ -104,15 +104,30 @@ void change_boundary_id(
 const dealii::types::boundary_id INNER_ID = 1, OUTER_ID = 2, SIDES_ID = 3; 
 
 template<int dim>
-dealii::Triangulation<2> get_capacitor_triangulation(const RadialCapacitor& capacitor) {
-    dealii::Triangulation<2> triangulation;
-    const dealii::Point<2> center(0, 0);
+dealii::Triangulation<dim> create_capacitor_triangulation(const RadialCapacitor& capacitor) {
+    dealii::Triangulation<dim> triangulation;
+    const dealii::Point<dim> center(0, 0);
     dealii::GridGenerator::hyper_shell( triangulation, center, capacitor.r0, capacitor.r2, 10, true);
     change_boundary_id(triangulation, 1, OUTER_ID);
     change_boundary_id(triangulation, 0, INNER_ID);
     return triangulation;
 } 
 
+dealii::Triangulation<2> import_capacitor_triangulation(std::string file) {
+    dealii::Triangulation<2> triangulation;
+    dealii::GridIn<2> gridin;
+    gridin.attach_triangulation(triangulation);
+    std::ifstream input_file(file);
+    gridin.read_msh(input_file);  // Gmsh format
+
+    dealii::Point<2> center(0.0, 0.0);
+    triangulation.set_manifold(INNER_ID, dealii::SphericalManifold<2>(center));
+    triangulation.set_all_manifold_ids_on_boundary(INNER_ID);
+    triangulation.set_manifold(OUTER_ID, dealii::SphericalManifold<2>(center));
+    triangulation.set_all_manifold_ids_on_boundary(OUTER_ID);
+
+    return triangulation;
+} 
 
 template <int dim>
 unsigned int count_faces_with_boundary_id(const dealii::Triangulation<dim> &triangulation, const unsigned int boundary_id) {
@@ -136,24 +151,8 @@ int main() {
 
     // Create triangulation
 
-    //dealii::Triangulation<2> triangulation = get_capacitor_triangulation<2>(capacitor);
-
-    dealii::Triangulation<2> triangulation;
-    dealii::GridIn<2> gridin;
-    gridin.attach_triangulation(triangulation);
-    std::ifstream input_file("../capacitor.msh");
-    gridin.read_msh(input_file);  // Gmsh format
-
-    dealii::Point<2> center(0.0, 0.0);
-    triangulation.set_manifold(INNER_ID, dealii::SphericalManifold<2>(center));
-    triangulation.set_manifold(OUTER_ID, dealii::SphericalManifold<2>(center));
-
-    std::cout << "boudnary id 0: " << count_faces_with_boundary_id(triangulation, 0) << "\n";
-    std::cout << "boudnary id 1: " << count_faces_with_boundary_id(triangulation, 1) << "\n";
-    std::cout << "boudnary id 2: " << count_faces_with_boundary_id(triangulation, 2) << "\n";
-    std::cout << "boudnary id 3: " << count_faces_with_boundary_id(triangulation, 3) << "\n";
-    std::cout << "boudnary id 4: " << count_faces_with_boundary_id(triangulation, 4) << "\n";
-    std::cout << "boudnary id 5: " << count_faces_with_boundary_id(triangulation, 5) << "\n";
+    //dealii::Triangulation<2> triangulation = create_capacitor_triangulation<2>(capacitor);
+    dealii::Triangulation<2> triangulation = import_capacitor_triangulation("../capacitor.msh");
 
     // solve
 
@@ -178,6 +177,8 @@ int main() {
 
         auto solution = solve_cg(poisson_system.matrix, poisson_system.rhs);
         constraints.distribute(solution);
+
+        // out
 
         write_out_solution(dof_handler, solution, std::format("solutions/solution{:02}.vtu", i));
 
