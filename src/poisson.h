@@ -158,7 +158,7 @@ dealii::Vector<double> solve_cg(const MatrixType& system_matrix, const VectorTyp
     dealii::Vector<double> solution;
     solution.reinit(system_matrix.m());
 
-    dealii::SolverControl solver_control(1000, 1e-6 * rhs.l2_norm());
+    dealii::SolverControl solver_control(2000, 1e-6 * rhs.l2_norm());
     dealii::PreconditionSSOR<MatrixType> preconditioner;
     preconditioner.initialize(system_matrix, 1.2);
 

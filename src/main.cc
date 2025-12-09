@@ -137,7 +137,6 @@ int main() {
     // Create triangulation
 
     //dealii::Triangulation<2> triangulation = get_capacitor_triangulation<2>(capacitor);
-    //triangulation.refine_global(2);
 
     dealii::Triangulation<2> triangulation;
     dealii::GridIn<2> gridin;
