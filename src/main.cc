@@ -17,7 +17,10 @@
 #include <string>
 #include <format>
 
+#include "assembly_predicates.h"
 #include "poisson.h"
+
+using namespace dealii::Functions;
 
 struct RadialCapacitor{
     const double r0;
@@ -29,23 +32,23 @@ struct RadialCapacitor{
 
     const double epsilon0_1;
     const double epsilon1_2;
+
+    const double surface_charge;
 };
 
-template <int dim>
-class PermittivityFunction : public dealii::Function<dim> {
-public:
-    const RadialCapacitor capacitor;
-    PermittivityFunction(const RadialCapacitor capacitor) : capacitor(capacitor) {}
-
-    double value(const dealii::Point<dim> &p, const unsigned int = 0) const override {
-        return p.norm() < capacitor.r1 ? capacitor.epsilon0_1 : capacitor.epsilon1_2;
-    }
-};
+//template <int dim>
+//class PermittivityFunction : public dealii::Function<dim> {
+//public:
+//    const RadialCapacitor capacitor;
+//    PermittivityFunction(const RadialCapacitor capacitor) : capacitor(capacitor) {}
+//
+//    double value(const dealii::Point<dim> &p, const unsigned int = 0) const override {
+//        return p.norm() < capacitor.r1 ? capacitor.epsilon0_1 : capacitor.epsilon1_2;
+//    }
+//};
 
 class Exact2DPotentialSolution : public dealii::Function<2> {
 private:
-    // phi(r) = solution[0] ln r + solution[1]   :  r ∈ [r0, r1]
-    // phi(r) = solution[2] ln r + solution[3]   :  r ∈ [r1, r2]
     dealii::Vector<double> consts; 
     const RadialCapacitor capacitor;
 
@@ -59,12 +62,12 @@ public:
             : consts[2]*std::log(r) + consts[3];
     }
 
-    Exact2DPotentialSolution(const RadialCapacitor capacitor) : capacitor(capacitor) {
+    Exact2DPotentialSolution(const RadialCapacitor& capacitor) : capacitor(capacitor) {
 
-        const double rhs_vec[4] = { capacitor.voltage0, capacitor.voltage2, 0, 0 };
+        const double rhs_vec[4] = { capacitor.voltage0, capacitor.voltage2, 0, capacitor.surface_charge*capacitor.r1 };
         const double system_mat[4][4] = {
             { std::log(capacitor.r0), 1.0, 0.0, 0.0 },
-            { 0.0, 0.0, 1/(capacitor.r2), 0.0 },
+            { 0.0, 0.0, std::log(capacitor.r2), 1.0 },
             { std::log(capacitor.r1), 1.0, -std::log(capacitor.r1), -1.0 },
             { capacitor.epsilon0_1, 0.0, -capacitor.epsilon1_2, 0.0 }
         };
@@ -114,7 +117,7 @@ dealii::Triangulation<dim> create_capacitor_triangulation(const RadialCapacitor&
     return triangulation;
 } 
 
-dealii::Triangulation<2> import_gmsh_capacitor_triangulation(std::string file) {
+dealii::Triangulation<2> import_gmsh_capacitor_triangulation(std::string&& file) {
     dealii::Triangulation<2> triangulation;
     dealii::GridIn<2> gridin;
     gridin.attach_triangulation(triangulation);
@@ -127,15 +130,17 @@ dealii::Triangulation<2> import_gmsh_capacitor_triangulation(std::string file) {
 template <int dim>
 unsigned int count_faces_with_boundary_id(const dealii::Triangulation<dim> &triangulation, const unsigned int boundary_id) {
     unsigned int count = 0;
-    for (const auto &cell : triangulation.active_cell_iterators())
-        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell; ++f)
+    for (const auto &cell : triangulation.active_cell_iterators()) {
+        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell; ++f) {
             if (cell->face(f)->at_boundary() &&
                 cell->face(f)->boundary_id() == boundary_id)
                 ++count;
+        }
+    }
     return count;
 }
 
-const double MIN_CELL_SIZE = 0.001;
+const double MIN_CELL_SIZE = 0.0001;
 const double MAX_CELL_SIZE = 0.3;
 
 
@@ -144,15 +149,13 @@ void test_on_radial_capacitor() {
 
     // problem definition
 
-    const RadialCapacitor capacitor{0.5, 0.75, 1., 0., 0.75, 1., 2.}; // r0, r1, r2, U0, U2, eps0_1, eps1_2
+    const RadialCapacitor capacitor{0.5, 0.75, 1., 0., 0.5, 1., 2., 1.0}; // r0, r1, r2, U0, U2, eps0_1, eps1_2, surface_charge
     const Exact2DPotentialSolution ex_solution(capacitor); 
-    const PermittivityFunction<2> permittivity{capacitor};
+    //const PermittivityFunction<2> permittivity{capacitor};
 
     // Create triangulation
 
-    //dealii::Triangulation<2> triangulation = create_capacitor_triangulation<2>(capacitor);
     dealii::Triangulation<2> triangulation = import_gmsh_capacitor_triangulation("../capacitor.msh");
-
     dealii::Point<2> center(0.0, 0.0);
     triangulation.set_manifold(1, dealii::SphericalManifold<2>(center));
     triangulation.set_all_manifold_ids(1);
@@ -165,24 +168,54 @@ void test_on_radial_capacitor() {
 
     std::ofstream error_file("l2_errors.txt");
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 12; i++) {
 
         dealii::AffineConstraints<double> constraints;
         dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-        dealii::VectorTools::interpolate_boundary_values(dof_handler, INNER_ID, dealii::Functions::ConstantFunction<2>(capacitor.voltage0), constraints);
+        dealii::VectorTools::interpolate_boundary_values(dof_handler, INNER_ID, ConstantFunction<2>(capacitor.voltage0), constraints);
+        dealii::VectorTools::interpolate_boundary_values(dof_handler, OUTER_ID, ConstantFunction<2>(capacitor.voltage2), constraints);
         constraints.close();
 
         auto poisson_system = LinearSystem(dof_handler, constraints);
 
-        assemble_poisson_system(dof_handler, constraints, -1, permittivity, poisson_system.matrix, poisson_system.rhs);
-        assemble_poisson_rhs(dof_handler, permittivity, OUTER_ID, dealii::Functions::ConstantFunction<2>(ex_solution.get_consts()(2)/capacitor.r2), poisson_system.rhs);
-        assemble_poisson_rhs(dof_handler, permittivity, SIDES_ID, dealii::Functions::ZeroFunction<2>(), poisson_system.rhs);
+        assemble_poisson_volume(dof_handler, constraints, poisson_system.matrix, poisson_system.rhs,
+                ConstantFunction<2>(capacitor.epsilon0_1),
+                MaterialIDPredicate<2>{.material_id=INNER_MAT_ID});
+
+        assemble_poisson_volume(dof_handler, constraints, poisson_system.matrix, poisson_system.rhs,
+                ConstantFunction<2>(capacitor.epsilon1_2),
+                MaterialIDPredicate<2>{.material_id=OUTER_MAT_ID});
+
+        // surface charge
+
+        assemble_poisson_boundary_source(dof_handler, poisson_system.rhs,
+                ConstantFunction<2>(capacitor.surface_charge),
+                InterfacePredicate<2>{.mat1=INNER_MAT_ID, .mat2=OUTER_MAT_ID});
+
+        // boundary conditions
+
+        assemble_poisson_neuman_condition(dof_handler, poisson_system.rhs,
+                ConstantFunction<2>(capacitor.epsilon1_2),
+                ConstantFunction<2>(ex_solution.get_consts()(2)/capacitor.r2),
+                BoundaryIDPredicate<2>{.boundary_id=OUTER_ID});
+
+        //assemble_poisson_neuman_condition(dof_handler, poisson_system.rhs,
+        //        ConstantFunction<2>(capacitor.epsilon1_2),
+        //        ZeroFunction<2>(),
+        //        BoundaryAndMaterialPredicate<2>{.boundary_id=OUTER_ID, .material_id=OUTER_MAT_ID});
+
+        //assemble_poisson_neuman_condition(dof_handler, poisson_system.rhs,
+        //        ConstantFunction<2>(capacitor.epsilon0_1),
+        //        ZeroFunction<2>(),
+        //        BoundaryAndMaterialPredicate<2>{.boundary_id=OUTER_ID, .material_id=INNER_MAT_ID});
+
 
         auto solution = solve_cg(poisson_system.matrix, poisson_system.rhs);
         constraints.distribute(solution);
 
         // out
 
+        //dealii::VectorTools::interpolate(dof_handler, ex_solution, solution);
         write_out_solution(dof_handler, solution, std::format("solutions/solution{:02}.vtu", i));
 
         // l2 error

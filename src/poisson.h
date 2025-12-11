@@ -31,72 +31,19 @@
 #include <cmath>
 #include <fstream>
 
-dealii::UpdateFlags POISSON_VOLUME_FLAGS = 
-    dealii::update_gradients |
-    dealii::update_JxW_values |
-    dealii::update_quadrature_points;
+#include "assembly_predicates.h"
+#include "poisson_local_assembly.h"
 
 
-template<int dim>
-void assemble_local_poisson_volume_matrix(
-    const dealii::FEValues<dim> &fe_values,
-    const dealii::Function<dim> &permittivity,
-    dealii::FullMatrix<double> &local_mat
-) {
-    const auto flags = fe_values.get_update_flags();
-    Assert((flags & POISSON_VOLUME_FLAGS) == POISSON_VOLUME_FLAGS,
-       dealii::ExcMessage("assemble_local_poisson_volume_matrix: FEValues missing required update flags."));
-
-    for (const uint q : fe_values.quadrature_point_indices()) {
-        const dealii::Point<dim> &x_q = fe_values.quadrature_point(q);
-        for (uint i = 0; i < fe_values.get_fe().dofs_per_cell; i++) {
-            for (uint j = 0; j < fe_values.get_fe().dofs_per_cell; j++) {
-                local_mat(i, j) += fe_values.shape_grad(i, q) 
-                    * permittivity.value(x_q) 
-                    * fe_values.shape_grad(j, q) 
-                    * fe_values.JxW(q);
-            }
-        }
-    }
-}
-
-
-dealii::UpdateFlags POISSON_BOUNDARY_RHS_FLAGS = 
-    dealii::update_values |
-    dealii::update_JxW_values  |
-    dealii::update_quadrature_points;
-
-
-template<int dim>
-void assemble_local_poisson_rhs(
-    const dealii::FEFaceValues<dim>& fe_face_values,
-    const dealii::Function<dim>& permittivity,
-    const dealii::Function<dim>& flux,
-    dealii::Vector<double>& cell_rhs
-) {
-    const auto flags = fe_face_values.get_update_flags();
-    Assert((flags & POISSON_BOUNDARY_RHS_FLAGS) == POISSON_BOUNDARY_RHS_FLAGS,
-       dealii::ExcMessage("assemble_local_poisson_boundary_matrix: FEValues missing required update flags."));
-
-    for (const uint q : fe_face_values.quadrature_point_indices()) {
-        const dealii::Point<dim> &x_q = fe_face_values.quadrature_point(q);
-        const double eps = permittivity.value(x_q);
-
-        for (uint i = 0; i < fe_face_values.get_fe().dofs_per_cell; ++i) {
-            cell_rhs(i) += fe_face_values.shape_value(i, q) * eps * flux.value(x_q) * fe_face_values.JxW(q);
-        }
-    }
-}
-
-
-template<int dim>
-void assemble_poisson_system(
+template<int dim, typename CellPredicate>
+requires CellPredicateConcept<dim, CellPredicate>
+void assemble_poisson_volume(
     const dealii::DoFHandler<dim>& dof_handler,
     const dealii::AffineConstraints<double>& constraints,
-    const dealii::types::material_id material_id, 
-    const dealii::Function<dim>& permittivity,
     dealii::SparseMatrix<double>& system_matrix,
-    dealii::Vector<double>& system_rhs
+    dealii::Vector<double>& system_rhs,
+    const dealii::Function<dim>& permittivity,
+    CellPredicate&& cell_predicate
 ) {
     auto& fe = dof_handler.get_fe();
     
@@ -108,32 +55,79 @@ void assemble_poisson_system(
     std::vector<dealii::types::global_dof_index> local_dof(fe.dofs_per_cell);
 
     for (const auto& cell : dof_handler.active_cell_iterators()) {
-        if (material_id != dealii::numbers::invalid_material_id &&
-            material_id != cell->material_id() ) { continue; }
+        if (!cell_predicate(*cell)) continue;
 
         local_mat = 0;
         cell_rhs = 0;
 
         fe_values.reinit(cell);
-        assemble_local_poisson_volume_matrix(fe_values, permittivity, local_mat);
+        assemble_local_poisson_volume(fe_values, permittivity, local_mat);
 
         cell->get_dof_indices(local_dof);
         constraints.distribute_local_to_global(local_mat, cell_rhs, local_dof, system_matrix, system_rhs);
     }
 }
 
+
 template<int dim>
-void assemble_poisson_rhs(
+void assemble_poisson_volume(
     const dealii::DoFHandler<dim>& dof_handler,
+    const dealii::AffineConstraints<double>& constraints,
+    dealii::SparseMatrix<double>& system_matrix,
+    dealii::Vector<double>& system_rhs,
+    const dealii::Function<dim>& permittivity
+) {
+    assemble_poisson_volume(dof_handler, constraints, permittivity, system_matrix, system_rhs,
+            AlwaysTrueCellPredicate<dim>{});
+}
+
+
+template<int dim, typename FacePredicate>
+requires FacePredicateConcept<dim, FacePredicate>
+void assemble_poisson_boundary(
+    const dealii::DoFHandler<dim>& dof_handler,
+    const dealii::AffineConstraints<double>& constraints,
+    dealii::SparseMatrix<double>& system_matrix,
+    dealii::Vector<double>& system_rhs,
     const dealii::Function<dim>& permittivity,
-    const dealii::types::boundary_id boundary_id,
-    const dealii::Function<dim>& flux,
-    dealii::Vector<double>& system_rhs
+    FacePredicate&& face_predicate
 ) {
     auto& fe = dof_handler.get_fe();
     
     dealii::QGauss<dim-1> face_quadrature{fe.degree + 1};
-    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_BOUNDARY_RHS_FLAGS };
+    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_BOUNDARY_FLAGS};
+
+    dealii::FullMatrix<double> local_mat(fe.dofs_per_cell, fe.dofs_per_cell);
+    dealii::Vector<double> cell_rhs(fe.dofs_per_cell);
+    std::vector<dealii::types::global_dof_index> local_dof(fe.dofs_per_cell);
+
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        local_mat = 0;
+        cell_rhs = 0;
+
+        for (uint face = 0; face < dealii::GeometryInfo<dim>::faces_per_cell; ++face) {
+            if (!face_predicate(*cell, face)) continue;
+            fe_face_values.reinit(cell, face);
+            assemble_local_poisson_boundary(fe_face_values, permittivity, local_mat);
+        }
+
+        cell->get_dof_indices(local_dof);
+        constraints.distribute_local_to_global(local_mat, cell_rhs, local_dof, system_matrix, system_rhs);
+    }
+}
+
+template<int dim, typename FacePredicate>
+requires FacePredicateConcept<dim, FacePredicate>
+void assemble_poisson_boundary_source(
+    const dealii::DoFHandler<dim>& dof_handler,
+    dealii::Vector<double>& system_rhs,
+    const dealii::Function<dim>& surface_charge,
+    FacePredicate&& face_predicate
+) {
+    auto& fe = dof_handler.get_fe();
+    
+    dealii::QGauss<dim-1> face_quadrature{fe.degree + 1};
+    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_BOUNDARY_SOURCE_FLAGS};
 
     dealii::Vector<double> cell_rhs(fe.dofs_per_cell);
     std::vector<dealii::types::global_dof_index> local_dof(fe.dofs_per_cell);
@@ -142,12 +136,42 @@ void assemble_poisson_rhs(
         cell_rhs = 0;
 
         for (uint face = 0; face < dealii::GeometryInfo<dim>::faces_per_cell; ++face) {
-            if (!cell->face(face)->at_boundary()) continue;
-            if (boundary_id != dealii::numbers::invalid_boundary_id &&
-                boundary_id != cell->face(face)->boundary_id()) { continue; }
+            if (!face_predicate(*cell, face)) continue;
 
             fe_face_values.reinit(cell, face);
-            assemble_local_poisson_rhs(fe_face_values, permittivity, flux, cell_rhs);
+            assemble_local_poisson_boundary_source(fe_face_values, surface_charge, cell_rhs);
+        }
+
+        cell->get_dof_indices(local_dof);
+        system_rhs.add(local_dof, cell_rhs);
+    }
+}
+
+template<int dim, typename FacePredicate>
+requires FacePredicateConcept<dim, FacePredicate>
+void assemble_poisson_neuman_condition(
+    const dealii::DoFHandler<dim>& dof_handler,
+    dealii::Vector<double>& system_rhs,
+    const dealii::Function<dim>& permittivity,
+    const dealii::Function<dim>& flux,
+    FacePredicate&& face_predicate
+) {
+    auto& fe = dof_handler.get_fe();
+    
+    dealii::QGauss<dim-1> face_quadrature{fe.degree + 1};
+    dealii::FEFaceValues<dim> fe_face_values{fe, face_quadrature, POISSON_NEUMANN_FLAGS};
+
+    dealii::Vector<double> cell_rhs(fe.dofs_per_cell);
+    std::vector<dealii::types::global_dof_index> local_dof(fe.dofs_per_cell);
+
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        cell_rhs = 0;
+
+        for (uint face = 0; face < dealii::GeometryInfo<dim>::faces_per_cell; ++face) {
+            if(!face_predicate(*cell, face)) continue;
+
+            fe_face_values.reinit(cell, face);
+            assemble_local_poisson_neuman_condition(fe_face_values, permittivity, flux, cell_rhs);
         }
 
         cell->get_dof_indices(local_dof);
