@@ -399,7 +399,8 @@ void write_out_solution(
     dealii::Vector<double>& solution,
     dealii::Vector<double>& prev_solution,
     dealii::Vector<float>& cell_errors,
-    unsigned int iter
+    unsigned int iter,
+    std::string folder
 ) {
     dealii::DataOut<2> data_out;
     data_out.attach_dof_handler(dof_handler);
@@ -420,7 +421,7 @@ void write_out_solution(
 
     data_out.add_data_vector(cell_errors, "error_per_cell");
 
-    std::string file = std::format("reactor_solutions/solution{:02}.vtu", iter);
+    std::string file = folder + std::format("/solution{:02}.vtu", iter);
     std::ofstream output(file);
 
     data_out.build_patches();

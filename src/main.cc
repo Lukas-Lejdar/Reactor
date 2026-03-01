@@ -29,7 +29,7 @@
 #include <chrono>
 #include <iostream>
 #include <cstdlib>
-
+#include <unistd.h>
 
 #include <deal.II/grid/tria.h>
 #include <deal.II/grid/tria_accessor.h>
@@ -215,7 +215,13 @@ void apply_elementwise(VectorType &in, UnaryFunction f) {
 }
 
 
-void compute_reactor_potential() {
+void compute_reactor_potential(float refine_level) {
+
+    std::string folder = "reactor_solutions";
+    if (refine_level != 1) {
+        folder = folder + std::format("_{:.1f}adaptive", refine_level);
+    }
+
     auto triangulation = build_triangulation(vertices, faces, material_ids, manifold_ids, circle_centers, boundary_ids, boundary_manifold_ids);
     triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
 
@@ -244,26 +250,26 @@ void compute_reactor_potential() {
         solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
 
-        //{
-        //    Timer timer("Calculating residuals: ");
-        //    calculate_poisson_face_residual(dof_handler, solution, error_per_cell,
-        //            permittivity, AllNonBoundaryFacesPredicate<2>());
+        if (refine_level < 1.) {
+            Timer timer("Calculating residuals: ");
+            calculate_poisson_face_residual(dof_handler, solution, error_per_cell,
+                    permittivity, AllNonBoundaryFacesPredicate<2>());
 
-        //    apply_elementwise(error_per_cell, [](float x){ return std::sqrt(x); });
-        //}
+            apply_elementwise(error_per_cell, [](float x){ return std::sqrt(x); });
+        }
 
         {
             Timer timer("Writing to files: ");
-            write_out_solution( dof_handler, solution, prev_solution, error_per_cell, i); 
+            write_out_solution( dof_handler, solution, prev_solution, error_per_cell, i, folder); 
         }
 
-        //{
-        //    Timer timer("Executing adaptive refinement: ");
-        //    dealii::GridRefinement::refine_and_coarsen_fixed_number(triangulation, error_per_cell, 0.3, 0.0);
-        //    triangulation.execute_coarsening_and_refinement();
-        //}
+        if (refine_level < 1.) {
+            Timer timer("Executing adaptive refinement: ");
+            dealii::GridRefinement::refine_and_coarsen_fixed_number(triangulation, error_per_cell, refine_level, 0.0);
+            triangulation.execute_coarsening_and_refinement();
+        }
 
-        {
+        if (refine_level == 1.) {
             Timer timer("Executing global refinement: ");
 
             //MPI_Comm mpi_communicator = MPI_COMM_WORLD;
@@ -287,6 +293,19 @@ void compute_reactor_potential() {
 
 int main(int argc, char **argv) {
 
+    int opt;
+    float refine_level = 1;
+
+    while ((opt = getopt(argc, argv, "r:")) != -1) {
+        switch (opt) {
+            case 'r':
+                refine_level = std::stof(optarg);
+                Assert(refine_level <= 1, "Refine level must be smaller than 1");
+                Assert(refine_level < 0, "Refine level can't be negative");
+                break;
+        }
+    }
+
     //auto triangulation = build_triangulation(vertices, faces, material_ids, manifold_ids, circle_centers, boundary_ids, boundary_manifold_ids);
 
     //std::cout << "start\n";
@@ -300,8 +319,7 @@ int main(int argc, char **argv) {
     //std::ofstream out("exported.msh");
     //grid_out.write_msh(triangulation, out);
 
-    dealii::Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv, 1);
-    compute_reactor_potential();
+    compute_reactor_potential(refine_level);
 
     //improve_mesh_winslow();
 }
