@@ -301,8 +301,8 @@ int main(int argc, char **argv) {
         switch (opt) {
             case 'r':
                 refine_level = std::stof(optarg);
-                Assert(refine_level <= 1, "Refine level must be smaller than 1");
-                Assert(refine_level < 0, "Refine level can't be negative");
+                Assert(refine_level <= 1, dealii::ExcMessage("Refine level must be smaller than 1"));
+                Assert(refine_level < 0, dealii::ExcMessage("Refine level can't be negative"));
                 break;
         }
     }
