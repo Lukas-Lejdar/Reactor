@@ -246,8 +246,10 @@ void compute_reactor_potential(float refine_level) {
         solution = prev_solution;
         solve_reactor_potential(dof_handler, solution);
 
+        triangulation.prepare_coarsening_and_refinement();
+
         dealii::Vector<float> error_per_cell(triangulation.n_active_cells());
-        dealii::SolutionTransfer<2> solution_transfer(dof_handler);
+        dealii::Legacy::SolutionTransfer<2> solution_transfer(dof_handler);
         solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
 
@@ -286,7 +288,7 @@ void compute_reactor_potential(float refine_level) {
             Timer timer("Transfering solution: ");
             dof_handler.distribute_dofs(fe);
             prev_solution.reinit(dof_handler.n_dofs());
-            solution_transfer.interpolate(prev_solution);
+            solution_transfer.interpolate(solution, prev_solution);
         }
 
     }
