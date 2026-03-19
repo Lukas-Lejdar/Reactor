@@ -135,8 +135,8 @@ void compute_reactor_potential(float refine_level) {
         triangulation.prepare_coarsening_and_refinement();
 
         dealii::Vector<float> error_per_cell(triangulation.n_active_cells());
-        //dealii::Legacy::SolutionTransfer<2> solution_transfer(dof_handler);
-        //solution_transfer.prepare_for_coarsening_and_refinement(solution);
+        dealii::SolutionTransfer<2> solution_transfer(dof_handler);
+        solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
         if (refine_level < 1.) {
             Timer timer("Calculating residuals: ");
@@ -158,12 +158,6 @@ void compute_reactor_potential(float refine_level) {
 
         if (refine_level == 1.) {
             Timer timer("Executing global refinement: ");
-
-            //MPI_Comm mpi_communicator = MPI_COMM_WORLD;
-            //dealii::parallel::distributed::Triangulation<2> parallel_triangulation(mpi_communicator);
-            //parallel_triangulation.copy_triangulation(triangulation);
-            //triangulation.copy_triangulation(parallel_triangulation);
-        
             triangulation.refine_global(1);
         }
 
@@ -171,7 +165,7 @@ void compute_reactor_potential(float refine_level) {
             Timer timer("Transfering solution: ");
             dof_handler.distribute_dofs(fe);
             prev_solution.reinit(dof_handler.n_dofs());
-            //solution_transfer.interpolate(solution, prev_solution);
+            solution_transfer.interpolate(prev_solution);
         }
 
     }
@@ -206,7 +200,5 @@ int main(int argc, char **argv) {
     //grid_out.write_msh(triangulation, out);
 
     compute_reactor_potential(refine_level);
-
-    //improve_mesh_winslow();
 }
 
