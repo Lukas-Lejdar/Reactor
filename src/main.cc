@@ -1,41 +1,26 @@
 
-#include <boost/math/special_functions/math_fwd.hpp>
-#include <cstdlib>
 #include <deal.II/base/function.h>
-#include <deal.II/base/mpi_stub.h>
 #include <deal.II/base/types.h>
-#include <deal.II/grid/cell_data.h>
+#include <deal.II/base/mpi_stub.h>
 #include <deal.II/grid/tria.h>
 #include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/grid_refinement.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/lac/vector.h>
-#include <deal.II/numerics/vector_tools.h>
-#include <deal.II/grid/grid_refinement.h>
-#include <deal.II/grid/grid_in.h>
-#include <deal.II/grid/grid_out.h>
-#include <deal.II/grid/manifold_lib.h>
+#include <deal.II/lac/affine_constraints.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/solution_transfer.h>
-// #include <deal.II/numerics/error_estimator.h>
 
-#include <deal.II/numerics/vector_tools_interpolate.h>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <cmath>
-#include <iterator>
 #include <string>
-#include <format>
-#include <iostream>
-#include <cstdlib>
 #include <unistd.h>
+#include <format>
 
-#include <deal.II/grid/tria.h>
-#include <deal.II/grid/tria_accessor.h>
-#include <deal.II/grid/tria_iterator.h>
-#include <deal.II/grid/grid_tools.h>
-#include <deal.II/grid/cell_data.h>
-
+// Project headers
 #include "poisson_local_assembly.h"
 #include "assembly_predicates.h"
 #include "poisson.h"
