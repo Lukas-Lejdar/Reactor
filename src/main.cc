@@ -26,7 +26,6 @@
 #include <iterator>
 #include <string>
 #include <format>
-#include <chrono>
 #include <iostream>
 #include <cstdlib>
 #include <unistd.h>
@@ -41,12 +40,9 @@
 #include "assembly_predicates.h"
 #include "poisson.h"
 #include "mesh/mesh_processor.h"
+#include "timer.h"
 
 using namespace dealii::Functions;
-
-auto duration_ms(auto start, auto end) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-}
 
 const double water_permitivity = 78.;
 const double air_permitivity = 1.;
@@ -55,31 +51,6 @@ const double wedge_permitivity = 2.;
 const double V2 = 10.;
 const double V1= 0.;
 
-
-class Timer {
-public:
-    using clock = std::chrono::steady_clock;
-
-    explicit Timer(std::string name = "")
-        : name(std::move(name)),
-          start(clock::now()) {}
-
-    ~Timer() { stop(); }
-
-    void stop() {
-        auto end = clock::now();
-        auto duration = end - start;
-
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-
-        std::cout << name << ms << " ms\n";
-    }
-
-
-private:
-    std::string name;
-    clock::time_point start;
-};
 
 void solve_reactor_potential(
     dealii::DoFHandler<2>& dof_handler,
