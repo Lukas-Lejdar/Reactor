@@ -39,95 +39,10 @@
 
 #include "poisson_local_assembly.h"
 #include "assembly_predicates.h"
-#include "mesh.h"
 #include "poisson.h"
+#include "mesh/mesh_processor.h"
 
 using namespace dealii::Functions;
-
-dealii::Triangulation<2> build_triangulation(
-    const std::vector<std::vector<float>> vertices,
-    const std::vector<std::vector<int>> faces,
-    const std::vector<int> material_ids,
-    const std::vector<std::pair<int, int>> manifold_ids,
-    const std::vector<std::pair<int, std::vector<float>>> circle_centers,
-    const std::vector<std::pair<std::vector<int>, int>> boundary_ids,
-    const std::vector<std::pair<std::vector<int>, int>> boundary_manifold_ids
-) {
-    dealii::Triangulation<2> triangulation;
-
-    std::vector<dealii::Point<2>> vertices_dealii(vertices.size());
-    for (unsigned int i = 0; i < vertices.size(); ++i) {
-        vertices_dealii[i] = dealii::Point<2>(vertices[i][0], vertices[i][1]);
-    }
-
-    std::vector<dealii::CellData<2>> cells(faces.size());
-    for (unsigned int i = 0; i < faces.size(); ++i) {
-        cells[i].vertices[0] = faces[i][0];
-        cells[i].vertices[1] = faces[i][1];
-        cells[i].vertices[2] = faces[i][3];
-        cells[i].vertices[3] = faces[i][2];
-        cells[i].material_id = i;
-    }
-
-    dealii::GridTools::consistently_order_cells(cells);
-    triangulation.create_triangulation(vertices_dealii, cells, dealii::SubCellData());
-
-    for (auto center : circle_centers) {
-        dealii::Point<2> point(center.second[0], center.second[1]);
-        triangulation.set_manifold(center.first, dealii::SphericalManifold<2>(point));
-    }
-
-    for (auto &cell : triangulation.active_cell_iterators()) {
-        int idx = cell->material_id();
-        cell->set_material_id(material_ids[idx]);
-        cell->set_user_index(idx);
-        
-        dealii::Point<2> center;
-        for (unsigned int v = 0; v < dealii::GeometryInfo<2>::vertices_per_cell; ++v) {
-            center += cell->vertex(v);
-        }
-        center /= dealii::GeometryInfo<2>::vertices_per_cell;
-
-        if (center[1] >= 2.5) {
-            cell->set_material_id(AIR_MAT_ID);
-        }
-
-        for (unsigned int i = 0; i < manifold_ids.size(); i++) {
-            if (manifold_ids[i].first == idx) {
-                //cell->set_manifold_id(manifold_ids[i].second);
-            }
-        }
-    }
-
-    for (auto &cell : triangulation.active_cell_iterators()) {
-        for (unsigned int f = 0; f < dealii::GeometryInfo<2>::faces_per_cell; ++f) {
-            int v0 = cell->face(f)->vertex_index(0);
-            int v1 = cell->face(f)->vertex_index(1);
-
-            
-            if (!cell->face(f)->at_boundary() && cell->neighbor(f)->index() < cell->index())
-                continue;
-
-            if (v0 > v1)
-                std::swap(v0, v1);
-
-
-            for (auto be : boundary_ids) {
-                if (v0 == be.first[0] && v1 == be.first[1]) {
-                    cell->face(f)->set_boundary_id(be.second);
-                }
-            }
-
-            for (auto me : boundary_manifold_ids) {
-                if (v0 == me.first[0] && v1 == me.first[1]) {
-                    cell->face(f)->set_manifold_id(me.second);
-                }
-            }
-        }
-    }
-
-    return triangulation;
-}
 
 auto duration_ms(auto start, auto end) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -223,7 +138,7 @@ void compute_reactor_potential(float refine_level) {
         folder = folder + std::format("_{:.1f}adaptive", refine_level);
     }
 
-    auto triangulation = build_triangulation(vertices, faces, material_ids, manifold_ids, circle_centers, boundary_ids, boundary_manifold_ids);
+    auto triangulation = build_triangulation();
     triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
 
     std::cout << "built triangulation\n";
@@ -236,8 +151,8 @@ void compute_reactor_potential(float refine_level) {
     dealii::Vector<double> prev_solution(dof_handler.n_dofs());
 
     auto permittivity = MaterialIdQuadratureFunction(
-                {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
-                {water_permitivity, air_permitivity, wedge_permitivity});
+        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
+        {water_permitivity, air_permitivity, wedge_permitivity});
 
     for (int i = 0; i < 9; i++) {
 
@@ -249,16 +164,14 @@ void compute_reactor_potential(float refine_level) {
         triangulation.prepare_coarsening_and_refinement();
 
         dealii::Vector<float> error_per_cell(triangulation.n_active_cells());
-        dealii::Legacy::SolutionTransfer<2> solution_transfer(dof_handler);
-        solution_transfer.prepare_for_coarsening_and_refinement(solution);
+        //dealii::Legacy::SolutionTransfer<2> solution_transfer(dof_handler);
+        //solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
         if (refine_level < 1.) {
             Timer timer("Calculating residuals: ");
             calculate_poisson_face_residual(dof_handler, solution, error_per_cell,
                     permittivity, AllNonBoundaryFacesPredicate<2>());
             apply_elementwise(error_per_cell, [](float x){ return std::sqrt(x); });
-
-            //dealii::KellyErrorEstimator<2>::estimate(dof_handler, dealii::QGauss<1>(fe.degree + 1), {}, solution, error_per_cell);
         }
 
         {
@@ -287,7 +200,7 @@ void compute_reactor_potential(float refine_level) {
             Timer timer("Transfering solution: ");
             dof_handler.distribute_dofs(fe);
             prev_solution.reinit(dof_handler.n_dofs());
-            solution_transfer.interpolate(solution, prev_solution);
+            //solution_transfer.interpolate(solution, prev_solution);
         }
 
     }
