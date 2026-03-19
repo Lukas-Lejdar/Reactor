@@ -20,10 +20,9 @@
 #include <unistd.h>
 #include <format>
 
-// Project headers
-#include "poisson_local_assembly.h"
-#include "assembly_predicates.h"
-#include "poisson.h"
+#include "assembly/poisson_local_assembly.h"
+#include "assembly/assembly_predicates.h"
+#include "assembly/poisson.h"
 #include "mesh/mesh_processor.h"
 #include "timer.h"
 
