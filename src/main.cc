@@ -451,20 +451,20 @@ void solve_reactor_potential_mixed_method(
         assembly(dof_handler, constraints, system_matrix, system_rhs, potential, flux, permittivity, boundary_potential);
     }
 
-    //{
-    //    Timer timer("solver: ");
-    //    solver(dof_handler, system_matrix, system_rhs, solution);
-    //}
-
-    try {
-        Timer timer("direct solver: ");
-        solution = system_rhs;
-        dealii::SparseDirectUMFPACK A_direct;
-        A_direct.solve(system_matrix, solution);
-
-    } catch (const dealii::ExceptionBase &exc) {
-        std::cerr << exc.what() << std::endl << std::endl;
+    {
+        Timer timer("solver: ");
+        solver(dof_handler, system_matrix, system_rhs, solution);
     }
+
+    //try {
+    //    Timer timer("direct solver: ");
+    //    solution = system_rhs;
+    //    dealii::SparseDirectUMFPACK A_direct;
+    //    A_direct.solve(system_matrix, solution);
+
+    //} catch (const dealii::ExceptionBase &exc) {
+    //    std::cerr << exc.what() << std::endl << std::endl;
+    //}
 
 }
 
