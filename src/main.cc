@@ -365,7 +365,7 @@ void solver(
     auto &P = solution.block(1); // potential unknowns
 
     const auto op_M = linear_operator(M);
-    dealii::ReductionControl reduction_control_M(2000, 1.0e-18, 1.0e-10);
+    dealii::ReductionControl reduction_control_M(6000, 1.0e-18, 1.0e-10);
     dealii::SolverCG<dealii::Vector<double>> solver_M(reduction_control_M);
     dealii::PreconditionJacobi<dealii::SparseMatrix<double>> preconditioner_M;
     preconditioner_M.initialize(M);
@@ -376,13 +376,13 @@ void solver(
     const auto op_S  = transpose_operator(op_B) * op_M_inv * op_B;
 
     const auto op_aS = transpose_operator(op_B) * linear_operator(preconditioner_M) * op_B;
-    dealii::IterationNumberControl iteration_control_aS(30, 1.e-18);
+    dealii::IterationNumberControl iteration_control_aS(90, 1.e-18);
     dealii::SolverCG<dealii::Vector<double>> solver_aS(iteration_control_aS);
     const auto preconditioner_S = inverse_operator(op_aS, solver_aS, dealii::PreconditionIdentity());
 
     const auto schur_rhs = transpose_operator(op_B) * op_M_inv * F - G;
 
-    dealii::SolverControl solver_control_S(4000, 1.e-8);
+    dealii::SolverControl solver_control_S(12000, 1.e-8);
     dealii::SolverCG<dealii::Vector<double>> solver_S(solver_control_S);
     const auto op_S_inv = inverse_operator(op_S, solver_S, preconditioner_S);
 
@@ -586,8 +586,8 @@ void compute_reactor_potential_mixed_method(float refine_level) {
     triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
 
     const dealii::FESystem<dim> fe (
-        dealii::FE_RaviartThomas<dim>(1),
-        dealii::FE_DGQ<dim>(1)
+        dealii::FE_RaviartThomas<dim>(0),
+        dealii::FE_DGQ<dim>(0)
     );
 
     dealii::DoFHandler<dim> dof_handler{triangulation};
