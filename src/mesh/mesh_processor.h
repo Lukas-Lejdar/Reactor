@@ -14,8 +14,8 @@ const double water_permitivity = 78.;
 const double air_permitivity = 1.;
 const double wedge_permitivity = 2.;
 
-const double V2 = 10.;
-const double V1= 0.;
+const double V2 = 0.;
+const double V1= 10.;
 
 dealii::Triangulation<2> build_triangulation() {
     dealii::Triangulation<2> triangulation;
