@@ -19,6 +19,12 @@
 #include <deal.II/lac/block_sparse_matrix.h>
 #include <deal.II/dofs/dof_tools.h>
 #include <deal.II/lac/sparse_direct.h>
+#include <deal.II/numerics/data_out_dof_data.h>
+#include <deal.II/numerics/data_component_interpretation.h>
+#include <deal.II/numerics/data_postprocessor.h>
+
+#include <deal.II/lac/vector.h>
+
 
 #include <deal.II/fe/fe_raviart_thomas.h>
 #include <deal.II/fe/fe_dgq.h>
@@ -142,7 +148,15 @@ void output_result(
 
     dealii::DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, solution_names, interpretation);
-    data_out.build_patches(3);
+
+    std::vector<std::string> solution_names_diff(dim, "E_diff");
+    solution_names_diff.emplace_back("potential_diff");
+
+    auto diff = solution;
+    diff -= prev_solution;
+
+    data_out.add_data_vector(dof_handler, diff, solution_names_diff, interpretation);
+    data_out.build_patches();
 
     std::string file = folder + std::format("/solution{:02}.vtu", iter);
     std::ofstream output(file);
@@ -427,7 +441,6 @@ void solve_reactor_potential_mixed_method(
     //}
 
     try {
-
         Timer timer("direct solver: ");
         solution = system_rhs;
         dealii::SparseDirectUMFPACK A_direct;
@@ -590,7 +603,7 @@ void compute_reactor_potential_mixed_method(float refine_level) {
 
         {
             Timer timer("Writing to files: ");
-            output_dof_values(dof_handler, solution, prev_solution, i, folder); 
+            output_result(dof_handler, solution, prev_solution, i, folder); 
         }
 
         if (refine_level < 1.) {
