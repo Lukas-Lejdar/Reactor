@@ -1,6 +1,8 @@
+#include <deal.II/base/exceptions.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/types.h>
 #include <deal.II/base/mpi_stub.h>
+#include <deal.II/fe/fe_update_flags.h>
 #include <deal.II/grid/tria.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_refinement.h>
@@ -9,6 +11,7 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/affine_constraints.h>
 #include <deal.II/numerics/data_out.h>
+#include <deal.II/numerics/data_postprocessor.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/solution_transfer.h>
 #include <deal.II/base/quadrature_lib.h>
@@ -33,6 +36,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <numeric>
 #include <string>
 #include <unistd.h>
 //#include <format>
@@ -41,44 +45,16 @@
 #include "mesh/mesh_processor.h"
 #include "timer.h"
 
+#include <vector>
+#include <fstream>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <cstdint>
+#include <cstring>      // for memcpy
+#include <string>
+
 using namespace dealii::Functions;
-
-template<int dim>
-void write_out_solution(
-    dealii::DoFHandler<dim>& dof_handler,
-    dealii::BlockVector<double>& solution,
-    dealii::BlockVector<double>& prev_solution,
-    dealii::Vector<float>& cell_errors,
-    unsigned int iter,
-    std::string folder
-) {
-    dealii::DataOut<2> data_out;
-    data_out.attach_dof_handler(dof_handler);
-
-    dealii::BlockVector<double> diff(solution);
-    diff -= prev_solution;
-
-    std::cout << "max diff block ";
-    for (unsigned int b = 0; b < diff.n_blocks(); ++b) {
-        std::cout << b << ": " << diff.block(b).linfty_norm() << " ";
-    }
-    std::cout << "\n";
-
-    data_out.add_data_vector(solution, "solution");
-    data_out.add_data_vector(diff, "diff");
-    data_out.add_data_vector(cell_errors, "error_per_cell");
-
-    std::ostringstream oss;
-    oss << folder << "/solution" << std::setw(2) << std::setfill('0') << iter << ".vtu";
-    std::string file = oss.str();
-    std::ofstream output(file);
-
-    data_out.build_patches();
-    data_out.write_vtu(output);
-    output.close();
-
-    std::cout << file << " out\n";
-}
 
 struct IdFunction {
     const std::vector<unsigned int> ids;
@@ -103,6 +79,163 @@ struct IdFunction {
         return base_value;
     }
 };
+
+template <int dim>
+class ElectricFieldPostprocessor : public dealii::DataPostprocessorVector<dim> {
+public:
+    ElectricFieldPostprocessor(const IdFunction &permittivity, std::string name)
+        : dealii::DataPostprocessorVector<dim>(name, dealii::update_values),
+          permittivity(permittivity)
+    {}
+
+    virtual void
+    evaluate_vector_field(
+        const dealii::DataPostprocessorInputs::Vector<dim> &inputs,
+        std::vector<dealii::Vector<double>> &computed_quantities) const override
+    {
+
+        for (unsigned int q = 0; q < inputs.solution_values.size(); ++q) {
+            const auto &cell = inputs.template get_cell<dim>();
+            const double eps = permittivity(cell->material_id());
+
+            for (unsigned int d = 0; d < dim; ++d) {
+                computed_quantities[q][d] = inputs.solution_values[q][d] / eps;
+            }
+        }
+    }
+
+private:
+    const IdFunction &permittivity;
+};
+
+template <int dim>
+class PotentialPostprocessor : public dealii::DataPostprocessorScalar<dim> {
+public:
+    PotentialPostprocessor(std::string name)
+        : dealii::DataPostprocessorScalar<dim>(name, dealii::update_values)
+    {}
+
+    virtual void
+        evaluate_vector_field (
+            const dealii::DataPostprocessorInputs::Vector<dim> &input_data,
+            std::vector<dealii::Vector<double> > &computed_quantities) const override
+        {
+            for (unsigned int q=0; q<input_data.solution_gradients.size(); ++q) {
+                computed_quantities[q][0] = input_data.solution_values[q][dim];
+            }
+        }
+};
+
+template<int dim> 
+void output_result( 
+    dealii::DoFHandler<dim>& dof_handler,
+    dealii::BlockVector<double>& solution,
+    dealii::BlockVector<double>& prev_solution,
+    unsigned int iter,
+    std::string folder
+) {
+    std::vector<std::string> solution_names(dim, "E");
+    solution_names.emplace_back("potential");
+    std::vector<dealii::DataComponentInterpretation::DataComponentInterpretation>
+        interpretation(dim, dealii::DataComponentInterpretation::component_is_part_of_vector);
+    interpretation.push_back(dealii::DataComponentInterpretation::component_is_scalar);
+
+    dealii::DataOut<dim> data_out;
+    data_out.add_data_vector(dof_handler, solution, solution_names, interpretation);
+    data_out.build_patches(3);
+
+    std::string file = folder + std::format("/solution{:02}.vtu", iter);
+    std::ofstream output(file);
+    data_out.write_vtu(output);
+    output.close();
+
+    std::cout << file << " out\n";
+
+    const auto el_fe = dealii::FE_Q<dim>(1);
+    dealii::DoFHandler<dim> el_dof_handler{dof_handler.get_triangulation()};
+    el_dof_handler.distribute_dofs(el_fe);
+    dealii::Vector<double> el_solution(el_dof_handler.n_dofs());
+
+}
+
+template<int dim>
+void output_dof_values(
+    dealii::DoFHandler<dim>& dof_handler,
+    dealii::BlockVector<double>& solution,
+    dealii::BlockVector<double>& prev_solution,
+    unsigned int iter,
+    std::string folder
+) {
+
+    auto permittivity = IdFunction(
+        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
+        {water_permitivity, air_permitivity, wedge_permitivity});
+
+    const auto& fe = dof_handler.get_fe();
+
+    dealii::FESystem<dim> el_fe(dealii::FE_DGQ<dim>(0), fe.dofs_per_cell+1);
+    dealii::DoFHandler<dim> el_dof_handler{dof_handler.get_triangulation()};
+    el_dof_handler.distribute_dofs(el_fe);
+    dealii::Vector<double> el_solution(el_dof_handler.n_dofs());
+
+    std::vector<dealii::types::global_dof_index> dof_indices(fe.dofs_per_cell);
+    std::vector<dealii::types::global_dof_index> el_dof_indices(el_fe.dofs_per_cell);
+
+    const dealii::QGauss<dim> quadrature(fe.degree + 2);
+    dealii::FEValues<dim> fe_values(fe, quadrature,
+        dealii::update_values | dealii::update_gradients |
+        dealii::update_quadrature_points | dealii::update_JxW_values
+    );
+
+    const dealii::FEValuesExtractors::Vector flux(0);
+    const dealii::FEValuesExtractors::Scalar potential(dim);
+
+    auto el_cell = el_dof_handler.begin_active();
+    for (const auto &cell : dof_handler.active_cell_iterators()) {
+        fe_values.reinit(cell);
+
+        cell->get_dof_indices(dof_indices);
+        el_cell->get_dof_indices(el_dof_indices);
+
+        for (unsigned int f = 0; f < cell->n_faces(); f++) {
+            double length = cell->face(f)->measure(); 
+            el_solution[el_dof_indices[f]] = solution[dof_indices[f]] / length; 
+        }
+
+        el_solution[el_dof_indices[fe.dofs_per_cell-1]] = solution[dof_indices[fe.dofs_per_cell-1]];
+        el_solution[el_dof_indices[fe.dofs_per_cell]] = permittivity(cell->material_id());
+
+
+        ++el_cell;
+    }
+
+    std::vector<std::string> solution_names(dim, "E");
+    solution_names.emplace_back("potential");
+    std::vector<dealii::DataComponentInterpretation::DataComponentInterpretation>
+        interpretation(dim, dealii::DataComponentInterpretation::component_is_part_of_vector);
+    interpretation.push_back(dealii::DataComponentInterpretation::component_is_scalar);
+
+    dealii::DataOut<dim> data_out;
+    data_out.add_data_vector(dof_handler, solution, solution_names, interpretation);
+
+    solution_names = {"flux_0", "flux_1", "flux_2", "flux_3", "potential2", "eps"};
+    interpretation.assign(
+        solution_names.size(), 
+        dealii::DataComponentInterpretation::component_is_scalar
+    );
+
+    data_out.add_data_vector(el_dof_handler, el_solution, solution_names, interpretation);
+    data_out.build_patches(2);
+
+    std::string file = folder + std::format("/solution{:02}.vtu", iter);
+    std::ofstream output(file);
+
+    data_out.build_patches();
+    data_out.write_vtu(output);
+    output.close();
+
+    std::cout << file << " out\n";
+}
 
 void assembly(
     dealii::DoFHandler<2>& dof_handler,
@@ -146,7 +279,7 @@ void assembly(
             for (unsigned int i = 0; i < fe.dofs_per_cell; i++) {
 
                 const auto pot_i = fe_values[potential].value(i, q);
-                const auto flux_i = fe_values[flux].value(i, q);
+                const dealii::Tensor<1, 2> flux_i = fe_values[flux].value(i, q);
                 const auto flux_div_i = fe_values[flux].divergence(i, q);
 
                 for (unsigned int j = 0; j < fe.dofs_per_cell; ++j) {
@@ -178,6 +311,7 @@ void assembly(
 
                 }
             }
+
         }
 
         cell->get_dof_indices(local_dof_indices);
@@ -218,7 +352,7 @@ void solver(
 
     const auto schur_rhs = transpose_operator(op_B) * op_M_inv * F - G;
 
-    dealii::SolverControl solver_control_S(2000, 1.e-12);
+    dealii::SolverControl solver_control_S(4000, 1.e-8);
     dealii::SolverCG<dealii::Vector<double>> solver_S(solver_control_S);
     const auto op_S_inv = inverse_operator(op_S, solver_S, preconditioner_S);
 
@@ -235,8 +369,7 @@ std::vector<dealii::types::global_dof_index> block_sizes(
 ) {
     const std::vector<dealii::types::global_dof_index> dofs_per_component = 
         dealii::DoFTools::count_dofs_per_fe_component(dof_handler);
-    const unsigned int n_u = dofs_per_component[0], n_p = dofs_per_component[2];
-    return {n_u, n_p};
+    return {dofs_per_component[0], dofs_per_component[2]};
 }
 
 void solve_reactor_potential_mixed_method(
@@ -248,12 +381,11 @@ void solve_reactor_potential_mixed_method(
     const unsigned int dim = 2;
     auto& fe = dof_handler.get_fe();
 
-    dealii::AffineConstraints<double> constraints;
-    dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-
     dealii::ComponentMask rt_mask = fe.component_mask(flux);
-    dealii::DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints, rt_mask);
 
+    dealii::AffineConstraints<double> constraints;
+    dealii::DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints, rt_mask);
+    dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
     constraints.close();
 
     dealii::BlockSparsityPattern sparsity_pattern;
@@ -275,9 +407,13 @@ void solve_reactor_potential_mixed_method(
         dealii::BlockDynamicSparsityPattern dsp(sizes, sizes);
         dealii::DoFTools::make_sparsity_pattern(dof_handler, dsp);
 
+        std::cout << "made sparsity pattern \n";
+
         sparsity_pattern.copy_from(dsp);
         system_matrix.reinit(sparsity_pattern);
         system_rhs.reinit(sizes);
+
+        std::cout << "reinitialized\n";
     }
 
     {
@@ -290,12 +426,119 @@ void solve_reactor_potential_mixed_method(
     //    solver(dof_handler, system_matrix, system_rhs, solution);
     //}
 
-    {
+    try {
+
         Timer timer("direct solver: ");
         solution = system_rhs;
         dealii::SparseDirectUMFPACK A_direct;
         A_direct.solve(system_matrix, solution);
 
+    } catch (const dealii::ExceptionBase &exc) {
+        std::cerr << exc.what() << std::endl << std::endl;
+    }
+
+}
+
+void error_estimator(
+    const dealii::DoFHandler<2>& dof_handler,
+    const dealii::BlockVector<double>& solution,
+    dealii::Vector<float>& errors_per_cell,
+    const dealii::FEValuesExtractors::Scalar& potential,
+    const dealii::FEValuesExtractors::Vector& flux
+) {
+    const unsigned int dim = 2;
+    const auto& fe = dof_handler.get_fe();
+
+    errors_per_cell = 0;
+
+    const dealii::QGauss<dim> quadrature(fe.degree + 2);
+    const dealii::QGauss<dim - 1> face_quadrature(fe.degree + 2);
+
+    dealii::FEValues<dim> fe_values(fe, quadrature,
+        dealii::update_values | dealii::update_gradients |
+        dealii::update_quadrature_points | dealii::update_JxW_values
+    );
+
+    dealii::FEFaceValues<dim> fe_fvalues(fe, face_quadrature,
+        dealii::update_values | dealii::update_normal_vectors |
+        dealii::update_quadrature_points | dealii::update_JxW_values
+    );
+
+    dealii::FEFaceValues<dim> fe_fvalues_neighbor( fe, face_quadrature,
+        dealii::update_gradients | dealii::update_normal_vectors |
+        dealii::update_quadrature_points );
+
+    dealii::FESubfaceValues<dim> fe_subface_values( fe, face_quadrature,
+        dealii::update_gradients | dealii::update_JxW_values |
+        dealii::update_normal_vectors | dealii::update_quadrature_points 
+    );
+
+    auto permittivity = IdFunction(
+        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
+        {water_permitivity, air_permitivity, wedge_permitivity});
+
+    std::vector<double> flux_div(fe_values.n_quadrature_points);
+    std::vector<dealii::Tensor<1,1>> flux_curl(fe_values.n_quadrature_points);
+    std::vector<dealii::Tensor<1,dim>> pot_grad(fe_values.n_quadrature_points);
+    std::vector<dealii::Tensor<1,dim>> flux_val(fe_values.n_quadrature_points);
+    std::vector<dealii::Tensor<1,dim>> flux_neighbor_val(fe_fvalues_neighbor.n_quadrature_points);
+
+    std::vector<dealii::Tensor<1,dim>> flux_neighbor_valb(fe_fvalues_neighbor.n_quadrature_points);
+    std::vector<dealii::Tensor<1,dim>> flux_valb(fe_fvalues.n_quadrature_points);
+
+    for (const auto &cell : dof_handler.active_cell_iterators()) {
+        double eps = permittivity(cell->material_id());
+        double hT = cell->diameter();
+
+        fe_values.reinit(cell);
+        fe_values[flux].get_function_values(solution, flux_val);
+        fe_values[flux].get_function_divergences(solution, flux_div);
+        fe_values[flux].get_function_curls(solution, flux_curl);
+        fe_values[potential].get_function_gradients(solution, pot_grad);
+
+
+        for (unsigned int q = 0; q < fe_values.n_quadrature_points; q++) {
+            errors_per_cell[cell->index()] += (
+                      flux_div[q] * flux_div[q] + flux_curl[q] * flux_curl[q] * std::pow(hT / eps, 2) 
+            ) * fe_values.JxW(q);
+        }
+
+        for (const auto &f : cell->face_indices()) {
+            const auto& face = cell->face(f);
+
+            if ( cell->at_boundary(f) ||
+                 cell->neighbor_is_coarser(f) ||
+                 cell->neighbor(f)->index() < cell->index() ) continue;
+
+            if (!cell->neighbor(f)->has_children()) {
+
+                double h_E = std::sqrt(face->measure());
+                auto neighbor = cell->neighbor(f);
+                double eps2 = permittivity(neighbor->material_id());
+
+                fe_fvalues.reinit(cell, f);
+                fe_fvalues_neighbor.reinit(neighbor, cell->neighbor_of_neighbor(f));
+
+                fe_fvalues[flux].get_function_values(solution, flux_valb);
+                fe_fvalues_neighbor[flux].get_function_values(solution, flux_neighbor_valb);
+
+                for (unsigned int q = 0; q < fe_fvalues.n_quadrature_points; q++) {
+                    const auto n = fe_fvalues.normal_vector(q);
+                    const auto jump = flux_neighbor_valb[q]/eps2 - flux_valb[q]/eps;
+                    errors_per_cell[cell->index()] += std::pow(h_E, 2) * (
+                            jump * jump - std::pow(n * jump, 2)
+                    ) * fe_fvalues.JxW(q);
+                }
+            } else {
+
+            }
+
+        }
+        
+    }
+
+    for (unsigned int i = 0; i < errors_per_cell.size(); i++) {
+        errors_per_cell[i] = std::sqrt(errors_per_cell[i]);
     }
 }
 
@@ -305,9 +548,7 @@ void compute_reactor_potential_mixed_method(float refine_level) {
 
     std::string folder = "reactor_solutions_mixed";
     if (refine_level != 1) {
-        std::ostringstream oss;
-        oss << folder << "_" << std::fixed << std::setprecision(1) << refine_level << "adaptive";
-        folder = oss.str();
+        folder = folder + std::format("_{:.1f}adaptive", refine_level);
     }
 
     auto triangulation = build_triangulation();
@@ -338,19 +579,18 @@ void compute_reactor_potential_mixed_method(float refine_level) {
         triangulation.prepare_coarsening_and_refinement();
 
         dealii::Vector<float> error_per_cell(triangulation.n_active_cells());
-        dealii::SolutionTransfer<2, dealii::BlockVector<double>> solution_transfer(dof_handler);
+        dealii::SolutionTransfer<dim, dealii::BlockVector<double>> solution_transfer(dof_handler);
         solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
-        //if (refine_level < 1.) {
-        //    Timer timer("Calculating residuals: ");
-        //    calculate_poisson_face_residual(dof_handler, solution, error_per_cell,
-        //            permittivity, AllNonBoundaryFacesPredicate<2>());
-        //    apply_elementwise(error_per_cell, [](float x){ return std::sqrt(x); });
-        //}
+        if (refine_level < 1.) {
+            Timer timer("Calculating residuals: ");
+            error_estimator(dof_handler, solution, error_per_cell, potential, flux);
+            std::cout << "error: " <<  error_per_cell.l2_norm() << "\n";
+        }
 
         {
             Timer timer("Writing to files: ");
-            write_out_solution(dof_handler, solution, prev_solution, error_per_cell, i, folder); 
+            output_dof_values(dof_handler, solution, prev_solution, i, folder); 
         }
 
         if (refine_level < 1.) {
@@ -378,6 +618,20 @@ void compute_reactor_potential_mixed_method(float refine_level) {
 }
 
 int main(int argc, char **argv) {
-    compute_reactor_potential_mixed_method(1);
+
+    int opt;
+    float refine_level = 1;
+
+    while ((opt = getopt(argc, argv, "r:")) != -1) {
+        switch (opt) {
+            case 'r':
+                refine_level = std::stof(optarg);
+                Assert(refine_level <= 1, dealii::ExcMessage("Refine level must be smaller than 1"));
+                Assert(refine_level > 0, dealii::ExcMessage("Refine level can't be negative"));
+                break;
+        }
+    }
+
+    compute_reactor_potential_mixed_method(refine_level);
 }
 
