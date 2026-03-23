@@ -140,7 +140,7 @@ void output_result(
     unsigned int iter,
     std::string folder
 ) {
-    std::vector<std::string> solution_names(dim, "E");
+    std::vector<std::string> solution_names(dim, "flux");
     solution_names.emplace_back("potential");
     std::vector<dealii::DataComponentInterpretation::DataComponentInterpretation>
         interpretation(dim, dealii::DataComponentInterpretation::component_is_part_of_vector);
@@ -149,13 +149,29 @@ void output_result(
     dealii::DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, solution_names, interpretation);
 
-    std::vector<std::string> solution_names_diff(dim, "E_diff");
+    std::vector<std::string> solution_names_diff(dim, "flux_diff");
     solution_names_diff.emplace_back("potential_diff");
 
     auto diff = solution;
     diff -= prev_solution;
-
     data_out.add_data_vector(dof_handler, diff, solution_names_diff, interpretation);
+
+    dealii::FESystem<dim> eps_fe(dealii::FE_DGQ<dim>(0));
+    dealii::DoFHandler<dim> eps_dof_handler{dof_handler.get_triangulation()};
+    eps_dof_handler.distribute_dofs(eps_fe);
+    dealii::Vector<double> eps(eps_dof_handler.n_dofs());
+
+    auto permittivity = IdFunction(
+        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
+        {water_permitivity, air_permitivity, wedge_permitivity});
+
+    std::vector<dealii::types::global_dof_index> dof_indices(eps_fe.dofs_per_cell);
+    for (const auto &cell : eps_dof_handler.active_cell_iterators()) {
+        cell->get_dof_indices(dof_indices);
+        eps[dof_indices[0]] = permittivity(cell->material_id());
+    }
+
+    data_out.add_data_vector(eps_dof_handler, eps, "eps");
     data_out.build_patches();
 
     std::string file = folder + std::format("/solution{:02}.vtu", iter);
@@ -167,8 +183,8 @@ void output_result(
 
     const auto el_fe = dealii::FE_Q<dim>(1);
     dealii::DoFHandler<dim> el_dof_handler{dof_handler.get_triangulation()};
-    el_dof_handler.distribute_dofs(el_fe);
-    dealii::Vector<double> el_solution(el_dof_handler.n_dofs());
+    eps_dof_handler.distribute_dofs(eps_fe);
+    dealii::Vector<double> el_solution(eps_dof_handler.n_dofs());
 
 }
 
