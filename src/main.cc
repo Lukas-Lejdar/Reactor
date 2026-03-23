@@ -525,7 +525,6 @@ void error_estimator(
         fe_values[flux].get_function_curls(solution, flux_curl);
         fe_values[potential].get_function_gradients(solution, pot_grad);
 
-
         for (unsigned int q = 0; q < fe_values.n_quadrature_points; q++) {
             errors_per_cell[cell->index()] += (
                       flux_div[q] * flux_div[q] + flux_curl[q] * flux_curl[q] * std::pow(hT / eps, 2) 
@@ -554,9 +553,12 @@ void error_estimator(
                 for (unsigned int q = 0; q < fe_fvalues.n_quadrature_points; q++) {
                     const auto n = fe_fvalues.normal_vector(q);
                     const auto jump = flux_neighbor_valb[q]/eps2 - flux_valb[q]/eps;
-                    errors_per_cell[cell->index()] += std::pow(h_E, 2) * (
+                    double error = std::pow(h_E, 2) * (
                             jump * jump - std::pow(n * jump, 2)
                     ) * fe_fvalues.JxW(q);
+
+                    errors_per_cell[cell->index()] += error/2;
+                    errors_per_cell[neighbor->index()] += error/2;
                 }
             } else {
 
@@ -584,8 +586,8 @@ void compute_reactor_potential_mixed_method(float refine_level) {
     triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
 
     const dealii::FESystem<dim> fe (
-        dealii::FE_RaviartThomas<dim>(0),
-        dealii::FE_DGQ<dim>(0)
+        dealii::FE_RaviartThomas<dim>(1),
+        dealii::FE_DGQ<dim>(1)
     );
 
     dealii::DoFHandler<dim> dof_handler{triangulation};
@@ -611,7 +613,7 @@ void compute_reactor_potential_mixed_method(float refine_level) {
         dealii::SolutionTransfer<dim, dealii::BlockVector<double>> solution_transfer(dof_handler);
         solution_transfer.prepare_for_coarsening_and_refinement(solution);
 
-        if (refine_level < 1.) {
+        {
             Timer timer("Calculating residuals: ");
             error_estimator(dof_handler, solution, error_per_cell, potential, flux);
             std::cout << "error: " <<  error_per_cell.l2_norm() << "\n";
