@@ -24,8 +24,6 @@
 #include <deal.II/numerics/data_component_interpretation.h>
 #include <deal.II/numerics/data_postprocessor.h>
 
-#include <deal.II/lac/vector.h>
-
 
 #include <deal.II/fe/fe_raviart_thomas.h>
 #include <deal.II/fe/fe_dgq.h>
@@ -48,7 +46,6 @@
 #include <string>
 #include <unistd.h>
 #include <filesystem>
-//#include <format>
 
 #include "mesh/mesh.h"
 #include "mesh/mesh_processor.h"
@@ -60,7 +57,6 @@
 #include <iomanip>
 #include <sstream>
 #include <cstdint>
-#include <cstring>      // for memcpy
 #include <string>
 
 using namespace dealii::Functions;
@@ -87,52 +83,6 @@ struct IdFunction {
 
         return base_value;
     }
-};
-
-template <int dim>
-class ElectricFieldPostprocessor : public dealii::DataPostprocessorVector<dim> {
-public:
-    ElectricFieldPostprocessor(const IdFunction &permittivity, std::string name)
-        : dealii::DataPostprocessorVector<dim>(name, dealii::update_values),
-          permittivity(permittivity)
-    {}
-
-    virtual void
-    evaluate_vector_field(
-        const dealii::DataPostprocessorInputs::Vector<dim> &inputs,
-        std::vector<dealii::Vector<double>> &computed_quantities) const override
-    {
-
-        for (unsigned int q = 0; q < inputs.solution_values.size(); ++q) {
-            const auto &cell = inputs.template get_cell<dim>();
-            const double eps = permittivity(cell->material_id());
-
-            for (unsigned int d = 0; d < dim; ++d) {
-                computed_quantities[q][d] = inputs.solution_values[q][d] / eps;
-            }
-        }
-    }
-
-private:
-    const IdFunction &permittivity;
-};
-
-template <int dim>
-class PotentialPostprocessor : public dealii::DataPostprocessorScalar<dim> {
-public:
-    PotentialPostprocessor(std::string name)
-        : dealii::DataPostprocessorScalar<dim>(name, dealii::update_values)
-    {}
-
-    virtual void
-        evaluate_vector_field (
-            const dealii::DataPostprocessorInputs::Vector<dim> &input_data,
-            std::vector<dealii::Vector<double> > &computed_quantities) const override
-        {
-            for (unsigned int q=0; q<input_data.solution_gradients.size(); ++q) {
-                computed_quantities[q][0] = input_data.solution_values[q][dim];
-            }
-        }
 };
 
 template<int dim> 
@@ -408,7 +358,6 @@ void solve_reactor_potential_mixed_method(
     const IdFunction& permittivity,
     const IdFunction& boundary_potential
 ) {
-    const unsigned int dim = 2;
     auto& fe = dof_handler.get_fe();
 
     dealii::ComponentMask rt_mask = fe.component_mask(flux);
