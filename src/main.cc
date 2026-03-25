@@ -1,3 +1,4 @@
+#include <boost/signals2/detail/auto_buffer.hpp>
 #include <deal.II/base/exceptions.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/types.h>
@@ -40,11 +41,13 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <getopt.h>
 #include <iostream>
 #include <iterator>
 #include <numeric>
 #include <string>
 #include <unistd.h>
+#include <filesystem>
 //#include <format>
 
 #include "mesh/mesh.h"
@@ -137,6 +140,7 @@ void output_result(
     dealii::DoFHandler<dim>& dof_handler,
     dealii::BlockVector<double>& solution,
     dealii::BlockVector<double>& prev_solution,
+    const IdFunction& permittivity,
     unsigned int iter,
     std::string folder
 ) {
@@ -160,10 +164,6 @@ void output_result(
     dealii::DoFHandler<dim> eps_dof_handler{dof_handler.get_triangulation()};
     eps_dof_handler.distribute_dofs(eps_fe);
     dealii::Vector<double> eps(eps_dof_handler.n_dofs());
-
-    auto permittivity = IdFunction(
-        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
-        {water_permitivity, air_permitivity, wedge_permitivity});
 
     std::vector<dealii::types::global_dof_index> dof_indices(eps_fe.dofs_per_cell);
     for (const auto &cell : eps_dof_handler.active_cell_iterators()) {
@@ -193,13 +193,11 @@ void output_dof_values(
     dealii::DoFHandler<dim>& dof_handler,
     dealii::BlockVector<double>& solution,
     dealii::BlockVector<double>& prev_solution,
+    const IdFunction& permittivity,
     unsigned int iter,
     std::string folder
-) {
 
-    auto permittivity = IdFunction(
-        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
-        {water_permitivity, air_permitivity, wedge_permitivity});
+) {
 
     const auto& fe = dof_handler.get_fe();
 
@@ -406,7 +404,9 @@ void solve_reactor_potential_mixed_method(
     dealii::DoFHandler<2>& dof_handler,
     dealii::BlockVector<double>& solution,
     const dealii::FEValuesExtractors::Scalar& potential,
-    const dealii::FEValuesExtractors::Vector& flux
+    const dealii::FEValuesExtractors::Vector& flux,
+    const IdFunction& permittivity,
+    const IdFunction& boundary_potential
 ) {
     const unsigned int dim = 2;
     auto& fe = dof_handler.get_fe();
@@ -421,14 +421,6 @@ void solve_reactor_potential_mixed_method(
     dealii::BlockSparsityPattern sparsity_pattern;
     dealii::BlockSparseMatrix<double> system_matrix;
     dealii::BlockVector<double> system_rhs;
-
-    auto permittivity = IdFunction(
-        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
-        {water_permitivity, air_permitivity, wedge_permitivity});
-
-    auto boundary_potential = IdFunction(
-        {ELECTRODE1_BOUNDARY_ID, ELECTRODE2_BOUNDARY_ID},
-        {V1, V2});
 
     {
         Timer timer("System initialization: ");
@@ -473,7 +465,8 @@ void error_estimator(
     const dealii::BlockVector<double>& solution,
     dealii::Vector<float>& errors_per_cell,
     const dealii::FEValuesExtractors::Scalar& potential,
-    const dealii::FEValuesExtractors::Vector& flux
+    const dealii::FEValuesExtractors::Vector& flux,
+    const IdFunction& permittivity
 ) {
     const unsigned int dim = 2;
     const auto& fe = dof_handler.get_fe();
@@ -501,10 +494,6 @@ void error_estimator(
         dealii::update_gradients | dealii::update_JxW_values |
         dealii::update_normal_vectors | dealii::update_quadrature_points 
     );
-
-    auto permittivity = IdFunction(
-        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
-        {water_permitivity, air_permitivity, wedge_permitivity});
 
     std::vector<double> flux_div(fe_values.n_quadrature_points);
     std::vector<dealii::Tensor<1,1>> flux_curl(fe_values.n_quadrature_points);
@@ -574,20 +563,28 @@ void error_estimator(
 }
 
 
-void compute_reactor_potential_mixed_method(float refine_level) {
+void compute_reactor_potential_mixed_method(
+    dealii::Triangulation<2>& triangulation,
+    const IdFunction& permittivity,
+    const IdFunction& boundary_potential,
+    float refine_level = 1,
+    unsigned int fe_deg = 0
+) {
     const unsigned int dim = 2;
 
     std::string folder = "reactor_solutions_mixed";
     if (refine_level != 1) {
-        folder = folder + std::format("_{:.1f}adaptive", refine_level);
+        folder = folder + std::format("_{:.1f}ad", refine_level);
+    }
+    if (fe_deg != 0) {
+        folder = folder + std::format("_{}d", fe_deg);
     }
 
-    auto triangulation = build_triangulation();
-    triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
+    std::filesystem::create_directories(folder);
 
     const dealii::FESystem<dim> fe (
-        dealii::FE_RaviartThomas<dim>(0),
-        dealii::FE_DGQ<dim>(0)
+        dealii::FE_RaviartThomas<dim>{fe_deg},
+        dealii::FE_DGQ<dim>{fe_deg}
     );
 
     dealii::DoFHandler<dim> dof_handler{triangulation};
@@ -605,7 +602,7 @@ void compute_reactor_potential_mixed_method(float refine_level) {
         std::cout << "\n";
 
         solution = prev_solution;
-        solve_reactor_potential_mixed_method(dof_handler, solution, potential, flux);
+        solve_reactor_potential_mixed_method(dof_handler, solution, potential, flux, permittivity, boundary_potential);
 
         triangulation.prepare_coarsening_and_refinement();
 
@@ -615,13 +612,13 @@ void compute_reactor_potential_mixed_method(float refine_level) {
 
         {
             Timer timer("Calculating residuals: ");
-            error_estimator(dof_handler, solution, error_per_cell, potential, flux);
+            error_estimator(dof_handler, solution, error_per_cell, potential, flux, permittivity);
             std::cout << "error: " <<  error_per_cell.l2_norm() << "\n";
         }
 
         {
             Timer timer("Writing to files: ");
-            output_result(dof_handler, solution, prev_solution, i, folder); 
+            output_result(dof_handler, solution, prev_solution, permittivity, i, folder); 
         }
 
         if (refine_level < 1.) {
@@ -652,6 +649,7 @@ int main(int argc, char **argv) {
 
     int opt;
     float refine_level = 1;
+    int fe_degree = 0;
 
     while ((opt = getopt(argc, argv, "r:")) != -1) {
         switch (opt) {
@@ -660,9 +658,25 @@ int main(int argc, char **argv) {
                 Assert(refine_level <= 1, dealii::ExcMessage("Refine level must be smaller than 1"));
                 Assert(refine_level > 0, dealii::ExcMessage("Refine level can't be negative"));
                 break;
+
+            case 'd':
+                fe_degree = std::stoi(optarg);
+                Assert(fe_degree >= 0, dealii::ExcMessage("Element degree must be non-negative"));
+                break;
         }
     }
 
-    compute_reactor_potential_mixed_method(refine_level);
+    auto permittivity = IdFunction(
+        {WATER_MAT_ID, AIR_MAT_ID, WEDGE_MAT_ID},
+        {water_permitivity, air_permitivity, wedge_permitivity});
+
+    auto boundary_potential = IdFunction(
+        {ELECTRODE1_BOUNDARY_ID, ELECTRODE2_BOUNDARY_ID},
+        {V1, V2});
+
+    auto triangulation = build_triangulation();
+    triangulation.set_mesh_smoothing( dealii::Triangulation<2>::limit_level_difference_at_vertices );
+
+    compute_reactor_potential_mixed_method(triangulation, permittivity, boundary_potential, refine_level, fe_degree);
 }
 
